@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
 from io import BytesIO
+import random
 
 # Configuration de la page
 st.set_page_config(
@@ -259,6 +260,7 @@ def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call") ->
                   .agg(Date=("Date","min"),
                        **{"SoldTo #":("SoldTo #","first")},
                        **{"SoldTo Name":("SoldTo Name","first")},  # Ajouter SoldTo Name
+                        **{"SoldTo Managed Group":("SoldTo Managed Group","first")},  
                        **{"Net Value":("Net Value","sum")},
                        **{"Created By Line":("Created By Line","first")},
                        **{"Purchase Order Type":("Purchase Order Type","first")},  # Ajouter Purchase Order Type
@@ -1236,6 +1238,80 @@ def get_top_clients_by_quotes(df_devis, fiscal_year, n=10):
     top_clients.columns = ['SoldTo #', 'Client', 'Valeur Devis']
     return top_clients.nlargest(n, 'Valeur Devis')[['Client', 'Valeur Devis']]
 
+def extract_managed_group_name(managed_group_value):
+    """Extrait le nom du groupe à partir de la colonne SoldTo Managed Group"""
+    if pd.isna(managed_group_value) or str(managed_group_value).strip() == '-':
+        return None
+    
+    value_str = str(managed_group_value).strip()
+    if '-' in value_str:
+        # Prendre tout ce qui est avant le dernier tiret
+        parts = value_str.split('-')
+        if len(parts) > 1:
+            return '-'.join(parts[:-1])  # Tout sauf la dernière partie
+    
+    return None  # Si pas de tiret, on ignore
+
+def get_top_managed_groups_by_type(df, fiscal_year, n=15, data_type="commandes"):
+    """Obtient les top groupes par valeur pour devis ou commandes normales"""
+    if df.empty or 'SoldTo Managed Group' not in df.columns:
+        return pd.DataFrame()
+    
+    # Ajouter la colonne du nom du groupe
+    df_copy = df.copy()
+    df_copy['Groupe_Name'] = df_copy['SoldTo Managed Group'].apply(extract_managed_group_name)
+    
+    # Filtrer seulement les lignes avec un groupe valide
+    df_groups = df_copy[df_copy['Groupe_Name'].notna()].copy()
+    
+    if df_groups.empty:
+        return pd.DataFrame()
+    
+    # Déterminer la colonne de valeur selon le type
+    if data_type == "devis":
+        net_value_col = get_net_value_column(df_groups, fiscal_year)
+        if not net_value_col:
+            return pd.DataFrame()
+        value_col = net_value_col
+        result_col_name = 'Valeur Devis'
+    else:  # commandes
+        net_value_col = get_net_value_column(df_groups, fiscal_year)
+        if not net_value_col:
+            return pd.DataFrame()
+        value_col = net_value_col
+        result_col_name = 'Valeur Commandes'
+    
+    # Grouper par groupe et sommer les valeurs
+    top_groups = df_groups.groupby('Groupe_Name')[value_col].sum().reset_index()
+    top_groups.columns = ['Groupe', result_col_name]
+    
+    return top_groups.nlargest(n, result_col_name)
+
+def get_top_managed_groups_real_orders(df_real_orders, n=15):
+    """Obtient les top groupes pour les commandes réelles (avec attribution)"""
+    if df_real_orders.empty or 'SoldTo Managed Group' not in df_real_orders.columns:
+        return pd.DataFrame()
+    
+    # Ajouter la colonne du nom du groupe
+    df_copy = df_real_orders.copy()
+    df_copy['Groupe_Name'] = df_copy['SoldTo Managed Group'].apply(extract_managed_group_name)
+    
+    # Filtrer seulement les lignes avec un groupe valide
+    df_groups = df_copy[df_copy['Groupe_Name'].notna()].copy()
+    
+    if df_groups.empty:
+        return pd.DataFrame()
+    
+    # Pour les commandes réelles, utiliser directement 'Net Value'
+    if 'Net Value' not in df_groups.columns:
+        return pd.DataFrame()
+    
+    # Grouper par groupe et sommer les valeurs
+    top_groups = df_groups.groupby('Groupe_Name')['Net Value'].sum().reset_index()
+    top_groups.columns = ['Groupe', 'Valeur Commandes Réelles']
+    
+    return top_groups.nlargest(n, 'Valeur Commandes Réelles')
+
 @st.cache_data
 def load_attribution_file(uploaded_file):
     """Charge le fichier d'attribution réelle des commandes"""
@@ -2068,7 +2144,95 @@ else:
         kpis_real_current = calculate_real_kpis(df_real_orders_filtered, None, df_mapping, selected_fiscal_year, period_months)
         kpis_real_prev = calculate_real_kpis(df_real_orders_prev_filtered, None, df_mapping, selected_fiscal_year - 1, period_months)
         current_mapping = df_mapping
-        
+
+
+    # Message d'encouragement personnalisé pour les commerciaux
+    if selected_commercial != "Tous les commerciaux":
+        if vue_type == "Commercial":
+            commercial_name = get_commercial_name(selected_commercial, df_mapping)
+            encouragements = [
+                "💪 Vous êtes sur la bonne voie, continuez comme ça !",
+                "🌟 Votre détermination fait la différence !",
+                "🚀 Chaque défi est une opportunité de briller !",
+                "⭐ Votre talent et votre persévérance portent leurs fruits !",
+                "🎯 Vous avez tout ce qu'il faut pour atteindre vos objectifs !",
+                "🔥 Votre énergie positive inspire toute l'équipe !",
+                "💎 Vous transformez chaque opportunité en succès !",
+                "🌈 Votre sourire et votre professionnalisme font la différence !",
+                "🏆 Chaque client satisfait est la preuve de votre excellence.",
+                "📈 Vos résultats sont à l’image de votre engagement : impressionnants !",
+                "💡 Votre créativité ouvre de nouvelles portes chaque jour.",
+                "🛠️ Vous construisez des relations solides qui dureront dans le temps.",
+                "🎉 Votre passion est contagieuse, elle entraîne toute l’équipe vers le haut.",
+                "📊 Vous transformez les objectifs en réussites concrètes.",
+                "🌍 Votre travail rayonne bien au-delà de votre portefeuille client.",
+                "💥 Vous avez cette force tranquille qui fait toute la différence.",
+                "🎯 Vous visez juste, et ça se voit dans vos résultats.",
+                "🚀 Grâce à vous, Signals continue de monter en puissance."
+            ]
+
+            
+            
+            encouragement_aleatoire = random.choice(encouragements)
+            
+            st.markdown(f"""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        padding: 15px 20px;
+                        border-radius: 10px;
+                        text-align: center;
+                        margin: 20px 0;
+                        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);'>
+                <h3 style='color: white; margin: 0; font-size: 22px;'>
+                    👋 Bonjour {commercial_name} !
+                </h3>
+                <p style='color: #f0f8ff; margin: 10px 0 0 0; font-size: 16px; font-style: italic;'>
+                    {encouragement_aleatoire}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        elif vue_type == "Commercial de saisie":
+            commercial_name = get_commercial_name(selected_commercial, df_mapping_saisie)
+            encouragements_saisie = [
+                "💪 Votre travail de saisie est essentiel à notre succès !",
+                "🌟 Chaque commande saisie contribue à notre réussite collective !",
+                "🚀 Votre précision et votre efficacité font toute la différence !",
+                "⭐ Vous êtes un maillon indispensable de notre chaîne de succès !",
+                "🎯 Votre rigueur dans la saisie nous aide à atteindre nos objectifs !",
+                "🔥 Votre engagement quotidien est remarquable !",
+                "💎 La qualité de votre travail se reflète dans nos résultats !",
+                "🌈 Votre contribution est précieuse et appréciée par tous !",
+                "🖋️ Vous inscrivez la réussite de Signals, ligne après ligne.",
+                "📑 Chaque saisie impeccable nous rapproche de l’excellence.",
+                "🔍 Votre attention au détail est un atout inestimable.",
+                "📦 Grâce à vous, chaque commande est traitée avec soin et rapidité.",
+                "⏱️ Votre efficacité fait gagner un temps précieux à toute l’équipe.",
+                "💼 Votre professionnalisme garantit la fluidité de nos opérations.",
+                "🛡️ Vous veillez à la qualité de nos données, et c’est inestimable.",
+                "📋 Vous faites de la précision une véritable signature personnelle.",
+                "🌟 Vous êtes la colonne vertébrale invisible de notre réussite.",
+                "🧩 Chaque information que vous traitez complète notre puzzle commun."
+            ]
+
+            
+            encouragement_aleatoire = random.choice(encouragements_saisie)
+            
+            st.markdown(f"""
+            <div style='background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+                        padding: 15px 20px;
+                        border-radius: 10px;
+                        text-align: center;
+                        margin: 20px 0;
+                        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);'>
+                <h3 style='color: white; margin: 0; font-size: 22px;'>
+                    👋 Bonjour {commercial_name} !
+                </h3>
+                <p style='color: #f0fff0; margin: 10px 0 0 0; font-size: 16px; font-style: italic;'>
+                    {encouragement_aleatoire}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
     # Affichage des KPIs principaux avec comparaison
     st.markdown("### 📊 Vue d'ensemble des performances")
 
@@ -3193,37 +3357,151 @@ else:
             else:
                 st.info("Aucune donnée de devis pour la période sélectionnée")
                 
+    # Section 10 : Top 15 Managed Groups
+    st.markdown("### 🏢 Top 15 des Groupes (Managed Groups)")
+
+    if vue_type == "Commercial de saisie":
+        # Pour Commercial de saisie : seulement top groupes commandes
+        col1, col2, col3 = st.columns([1, 2, 1])
         
-    # Footer avec informations sur les données
+        with col2:
+            st.markdown("##### 🏆 Top Groupes par Valeur de Commandes")
+            
+            if not df_commandes_filtered.empty:
+                df_top_groups_orders = get_top_managed_groups_by_type(df_commandes_filtered, selected_fiscal_year, 15, "commandes")
+                
+                if not df_top_groups_orders.empty:
+                    # Styler le tableau
+                    styled_groups_orders = df_top_groups_orders.style.format({
+                        'Valeur Commandes': '{:,.0f} €'
+                    })
+                    
+                    # Appliquer les couleurs
+                    styled_groups_orders = styled_groups_orders.apply(
+                        lambda x: ['background-color: #dbeafe' for _ in x], subset=['Groupe']
+                    )
+                    styled_groups_orders = styled_groups_orders.background_gradient(
+                        subset=['Valeur Commandes'], cmap='Greens'
+                    )
+                    
+                    st.dataframe(
+                        styled_groups_orders,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=400
+                    )
+                else:
+                    st.info("Aucun groupe trouvé pour la période sélectionnée")
+            else:
+                st.info("Aucune donnée de commandes pour la période sélectionnée")
+
+    else:
+        # Pour Vue globale et Commercial : 2 colonnes
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if vue_type == "Commercial":
+                # Pour Commercial : utiliser les commandes réelles (avec attribution)
+                st.markdown("##### 🏆 Top Groupes par Valeur de Commandes Réelles")
+                
+                if not df_real_orders_filtered.empty:
+                    df_top_groups_orders = get_top_managed_groups_real_orders(df_real_orders_filtered, 15)
+                    
+                    if not df_top_groups_orders.empty:
+                        # Styler le tableau
+                        styled_groups_orders = df_top_groups_orders.style.format({
+                            'Valeur Commandes Réelles': '{:,.0f} €'
+                        })
+                        
+                        # Appliquer les couleurs
+                        styled_groups_orders = styled_groups_orders.apply(
+                            lambda x: ['background-color: #dbeafe' for _ in x], subset=['Groupe']
+                        )
+                        styled_groups_orders = styled_groups_orders.background_gradient(
+                            subset=['Valeur Commandes Réelles'], cmap='Greens'
+                        )
+                        
+                        st.dataframe(
+                            styled_groups_orders,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400
+                        )
+                    else:
+                        st.info("Aucun groupe trouvé dans les commandes réelles")
+                else:
+                    st.info("Aucune donnée de commandes réelles pour la période sélectionnée")
+            else:
+                # Pour Vue globale : utiliser les commandes normales
+                st.markdown("##### 🏆 Top Groupes par Valeur de Commandes")
+                
+                if not df_commandes_filtered.empty:
+                    df_top_groups_orders = get_top_managed_groups_by_type(df_commandes_filtered, selected_fiscal_year, 15, "commandes")
+                    
+                    if not df_top_groups_orders.empty:
+                        # Styler le tableau
+                        styled_groups_orders = df_top_groups_orders.style.format({
+                            'Valeur Commandes': '{:,.0f} €'
+                        })
+                        
+                        # Appliquer les couleurs
+                        styled_groups_orders = styled_groups_orders.apply(
+                            lambda x: ['background-color: #dbeafe' for _ in x], subset=['Groupe']
+                        )
+                        styled_groups_orders = styled_groups_orders.background_gradient(
+                            subset=['Valeur Commandes'], cmap='Greens'
+                        )
+                        
+                        st.dataframe(
+                            styled_groups_orders,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400
+                        )
+                    else:
+                        st.info("Aucun groupe trouvé pour les commandes")
+                else:
+                    st.info("Aucune donnée de commandes pour la période sélectionnée")
+        
+        with col2:
+            # Pour Vue globale et Commercial : toujours afficher les groupes devis
+            st.markdown("##### 📈 Top Groupes par Valeur de Devis")
+            
+            if not df_devis_filtered.empty:
+                df_top_groups_quotes = get_top_managed_groups_by_type(df_devis_filtered, selected_fiscal_year, 15, "devis")
+                
+                if not df_top_groups_quotes.empty:
+                    # Styler le tableau
+                    styled_groups_quotes = df_top_groups_quotes.style.format({
+                        'Valeur Devis': '{:,.0f} €'
+                    })
+                    
+                    # Appliquer les couleurs
+                    styled_groups_quotes = styled_groups_quotes.apply(
+                        lambda x: ['background-color: #dbeafe' for _ in x], subset=['Groupe']
+                    )
+                    styled_groups_quotes = styled_groups_quotes.background_gradient(
+                        subset=['Valeur Devis'], cmap='Blues'
+                    )
+                    
+                    st.dataframe(
+                        styled_groups_quotes,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=400
+                    )
+                else:
+                    st.info("Aucun groupe trouvé pour les devis")
+            else:
+                st.info("Aucune donnée de devis pour la période sélectionnée")  
+                
+    # Footer personnalisé Signals
     st.markdown("---")
-    
-    # Déterminer le texte du footer selon le type de vue
-    if vue_type == "Vue globale":
-        vue_text = "Vue globale"
-        nb_commerciaux_text = f"{kpis_current['nb_commerciaux']} commerciaux"
-    elif vue_type == "Commercial":
-        vue_text = "Commerciaux avec objectifs"
-        if selected_commercial != "Tous les commerciaux":
-            commercial_name = get_commercial_name(selected_commercial, df_mapping)
-            nb_commerciaux_text = f"Commercial: {commercial_name}"
-        else:
-            nb_commerciaux_text = f"{len(commerciaux_list)} commerciaux avec objectifs"
-    else:  # Commercial de saisie
-        vue_text = "Commerciaux de saisie"
-        if selected_commercial != "Tous les commerciaux":
-            commercial_name = get_commercial_name(selected_commercial, df_mapping_saisie)
-            nb_commerciaux_text = f"Commercial de saisie: {commercial_name}"
-        else:
-            nb_commerciaux_text = f"{len(commerciaux_saisie_list)} commerciaux de saisie"
-    
-    st.markdown(f"""
-    <div style='text-align: center; color: #6b7280; font-size: 12px; padding: 10px;'>
-        📊 Données analysées pour l'année fiscale {selected_fiscal_year} 
-        {f"• {len(period_months)} mois analysés" if len(period_months) < 12 else "• Année complète"}
-        • {vue_text}: {nb_commerciaux_text}
-        <br>
-        🎯 Attribution réelle: {kpis_real_current['nb_commandes_reelles']:,} commandes • {kpis_real_current['valeur_commandes_reelles']:,.0f} € 
-        <br>
-        Dernière mise à jour: {datetime.now().strftime('%d/%m/%Y à %H:%M')}
+
+    st.markdown("""
+    <div style='text-align: center; padding: 20px; margin: 20px 0;'>
+        <div style='font-style: italic; color: #4f46e5; font-size: 16px; font-weight: 500; line-height: 1.5;'>
+            ✨ Chez Signals, chacun brille à sa façon, tous progressent ensemble… et notre objectif est clair : devenir les meilleurs, avec le sourire en prime 😊
+        </div>
     </div>
     """, unsafe_allow_html=True)
