@@ -229,13 +229,14 @@ def parse_date_column(df, date_column=None, file_type="devis"):
     return df
 
 def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devis") -> pd.DataFrame:
-    """Détecte et nettoie la colonne Net Value selon le type de fichier - VERSION CORRIGÉE"""
+    """Détecte et nettoie la colonne Net Value selon le type de fichier"""
     import re
     
     if file_type == "commandes":
         # Pour les commandes : chercher Customer Sales
         if "Customer Sales" in df.columns:
             value_col = "Customer Sales"
+            st.success(f"✅ Colonne trouvée pour commandes: {value_col}")
         else:
             available_cols = ', '.join(df.columns)
             raise KeyError(f"❌ Colonne 'Customer Sales' introuvable dans le fichier commandes. Colonnes disponibles : {available_cols}")
@@ -262,6 +263,8 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devi
             value_col = "Net Value"
         else:
             value_col = max(value_cols, key=extract_year)
+        
+        st.success(f"✅ Colonne trouvée pour devis: {value_col}")
     
     # Renommer la colonne pour uniformiser
     df = df.rename(columns={value_col: "Net Value"})
@@ -275,21 +278,19 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devi
     return df
 
 def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call", file_type="commandes") -> pd.DataFrame:
-    """Agrège les commandes par document selon le type de fichier - VERSION CORRIGÉE"""
+    """Agrège les commandes par document selon le type de fichier"""
     
-    # ✅ CORRECTION : Détecter automatiquement la bonne colonne
-    if file_type == "commandes" and "Created By Header" in orders.columns:
-        created_by_col = "Created By Header"
-    elif file_type == "devis" and "Created By Line" in orders.columns:
-        created_by_col = "Created By Line"
-    else:
-        # Fallback : essayer de détecter automatiquement
+    # Déterminer la colonne Created By selon le type
+    if file_type == "commandes":
         if "Created By Header" in orders.columns:
             created_by_col = "Created By Header"
-        elif "Created By Line" in orders.columns:
+        else:
+            raise ValueError("Colonne 'Created By Header' introuvable dans les commandes")
+    else:  # devis
+        if "Created By Line" in orders.columns:
             created_by_col = "Created By Line"
         else:
-            raise ValueError("Aucune colonne 'Created By' trouvée")
+            raise ValueError("Colonne 'Created By Line' introuvable dans les devis")
     
     # Flag IC au niveau commande (si au moins une ligne IC)
     ic_flag = (orders.assign(_is_ic=(orders["Purchase Order Type"] == IC_VALUE))
@@ -310,7 +311,7 @@ def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call", fi
         "Created By Line": (created_by_col, "first")  # Uniformiser le nom
     }
     
-    # Ajouter SoldTo Managed Group ou Payer Managed Group
+    # Ajouter la bonne colonne Managed Group selon le type
     if file_type == "commandes" and "Payer Managed Group" in orders.columns:
         agg_dict["SoldTo Managed Group"] = ("Payer Managed Group", "first")
     elif "SoldTo Managed Group" in orders.columns:
@@ -1436,14 +1437,12 @@ def create_real_orders_data(df_commandes, df_attribution, fiscal_year):
         df_attribution_clean['Order Document #'] = df_attribution_clean['Order Document #'].astype(str).str.strip()
         df_attribution_clean = df_attribution_clean.drop_duplicates(subset=['Order Document #'], keep='first')
         
-        # ✅ CORRECTION 3 : Utiliser la logique exacte du code Python
-        # Traiter TOUS les commerciaux en même temps, puis filtrer si nécessaire
+        # ✅ CORRECTION 3 : Spécifier explicitement le type de fichier
+        # Détecter et nettoyer la colonne Net Value POUR LES COMMANDES
+        df_with_net_value = _detect_net_value_column(df_commandes_clean, fiscal_year, "commandes")
         
-        # Détecter et nettoyer la colonne Net Value
-        df_with_net_value = _detect_net_value_column(df_commandes_clean, fiscal_year)
-        
-        # Agrégation par document
-        aggs = aggregate_orders_by_doc(df_with_net_value)
+        # Agrégation par document POUR LES COMMANDES
+        aggs = aggregate_orders_by_doc(df_with_net_value, "IC-Inbound Call", "commandes")
         
         # Attribution (INNER JOIN)
         attrib_unique = df_attribution_clean[["Order Document #","Created By Header"]].drop_duplicates("Order Document #")
@@ -1475,6 +1474,7 @@ def create_real_orders_data(df_commandes, df_attribution, fiscal_year):
         st.error(f"Erreur dans create_real_orders_data: {str(e)}")
         return pd.DataFrame()
     
+
 def categorize_real_commercials(df_real_orders, df_mapping_commerciaux, df_mapping_saisie):
     """Catégorise les commerciaux réels entre commerciaux et commerciaux de saisie"""
     if df_real_orders.empty:
