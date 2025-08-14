@@ -1847,7 +1847,7 @@ if not st.session_state.files_loaded:
         st.markdown("##### 🎯 Fichier des objectifs *")
         objectifs_file = st.file_uploader("Fichier avec les objectifs mensuels", type=['xlsx', 'xls'], key="objectifs_uploader", label_visibility="collapsed")
         
-        st.markdown("##### 👥 Fichier mapping commerciaux *")
+        st.markdown("##### 👥 Fichier de mapping des commerciaux partageant le même objectif *")
         mapping_file = st.file_uploader("Fichier avec les noms des commerciaux", type=['xlsx', 'xls'], key="mapping_uploader", label_visibility="collapsed")
     
     with col2:
@@ -1857,12 +1857,12 @@ if not st.session_state.files_loaded:
         st.markdown("##### 📝 Fichier mapping commerciaux de saisie *")
         mapping_saisie_file = st.file_uploader("Fichier avec les noms des commerciaux de saisie", type=['xlsx', 'xls'], key="mapping_saisie_uploader", label_visibility="collapsed")
         
-        st.markdown("##### 🎯 Fichier objectifs personnalisés")
+        st.markdown("##### 🎯 Fichier objectifs personnalisés *")
         objectifs_personnalises_file = st.file_uploader("Fichier avec les objectifs personnalisés par commercial", type=['xlsx', 'xls'], key="objectifs_personnalises_uploader", label_visibility="collapsed")
     
     col_left, col_center, col_right = st.columns([1, 2, 1])
     with col_center:
-        st.markdown("##### 🔍 Fichier attribution réelle commandes *")
+        st.markdown("##### 🔍 Fichier Quote Hit Rate *")
         attribution_file = st.file_uploader("Fichier avec l'attribution réelle des commandes aux commerciaux", type=['xlsx', 'xls'], key="attribution_uploader", label_visibility="collapsed")
     
     # Vérifier que tous les fichiers sont chargés
@@ -2158,7 +2158,7 @@ else:
                 "🎯 Vous avez tout ce qu'il faut pour atteindre vos objectifs !",
                 "🔥 Votre énergie positive inspire toute l'équipe !",
                 "💎 Vous transformez chaque opportunité en succès !",
-                "🌈 Votre sourire et votre professionnalisme font la différence !",
+                "❤️ Votre sourire et votre professionnalisme font la différence !",
                 "🏆 Chaque client satisfait est la preuve de votre excellence.",
                 "📈 Vos résultats sont à l’image de votre engagement : impressionnants !",
                 "💡 Votre créativité ouvre de nouvelles portes chaque jour.",
@@ -2201,7 +2201,7 @@ else:
                 "🎯 Votre rigueur dans la saisie nous aide à atteindre nos objectifs !",
                 "🔥 Votre engagement quotidien est remarquable !",
                 "💎 La qualité de votre travail se reflète dans nos résultats !",
-                "🌈 Votre contribution est précieuse et appréciée par tous !",
+                "❤️ Votre contribution est précieuse et appréciée par tous !",
                 "🖋️ Vous inscrivez la réussite de Signals, ligne après ligne.",
                 "📑 Chaque saisie impeccable nous rapproche de l’excellence.",
                 "🔍 Votre attention au détail est un atout inestimable.",
