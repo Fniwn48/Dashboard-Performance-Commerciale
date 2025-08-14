@@ -185,9 +185,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Fonctions utilitaires
-def parse_date_column(df, date_column='Created On Date - Line Local'):
-    """Parse la colonne date et ajoute les colonnes temporelles - VERSION CORRIGÉE"""
+def parse_date_column(df, date_column=None, file_type="devis"):
+    """Parse la colonne date et ajoute les colonnes temporelles - VERSION ADAPTÉE"""
     df = df.copy()
+    
+    # Déterminer automatiquement la colonne de date selon le type de fichier
+    if date_column is None:
+        if file_type == "commandes":
+            date_column = 'Posting Date'
+        else:  # devis
+            date_column = 'Created On Date - Line Local'
+    
+    # Vérifier que la colonne existe
+    if date_column not in df.columns:
+        available_cols = ', '.join(df.columns)
+        raise ValueError(f"❌ Colonne '{date_column}' introuvable. Colonnes disponibles : {available_cols}")
     
     df['Date'] = pd.to_datetime(df[date_column], format='%m/%d/%Y', errors='coerce')
     
@@ -202,15 +214,13 @@ def parse_date_column(df, date_column='Created On Date - Line Local'):
     df['Mois'] = df['Date'].dt.month
     df['Nom_Mois'] = df['Date'].dt.strftime('%B')
     
-    # ✅ CORRECTION PRINCIPALE : Calcul de l'année fiscale IDENTIQUE au code Python
-    # L'année fiscale N commence en août N-1 et se termine en juillet N
+    # Calcul de l'année fiscale
     df['Année_Fiscale'] = df.apply(
         lambda row: int(row['Année'] + 1) if row['Mois'] >= 8 else int(row['Année']), 
         axis=1
     )
     
-    # ✅ CORRECTION : Mois fiscal IDENTIQUE au code Python
-    # Août = 1, Septembre = 2, ..., Juillet = 12
+    # Mois fiscal
     df['Mois_Fiscal'] = df.apply(
         lambda row: ((int(row['Mois']) - 8) % 12) + 1 if pd.notna(row['Mois']) else pd.NA, 
         axis=1
@@ -218,27 +228,43 @@ def parse_date_column(df, date_column='Created On Date - Line Local'):
     
     return df
 
-def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int) -> pd.DataFrame:
-    """Détecte et nettoie la colonne Net Value - IDENTIQUE AU CODE PYTHON"""
+def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devis") -> pd.DataFrame:
+    """Détecte et nettoie la colonne Net Value selon le type de fichier"""
     import re
     
-    # Chercher les colonnes contenant "net value"
-    value_cols = [c for c in df.columns if "net value" in str(c).lower()]
-    if not value_cols:
-        raise KeyError("❌ Colonne 'Net Value' introuvable (ex: '2024  Net Value').")
+    if file_type == "commandes":
+        # Pour les commandes : chercher Customer Sales
+        if "Customer Sales" in df.columns:
+            value_col = "Customer Sales"
+        else:
+            raise KeyError("❌ Colonne 'Customer Sales' introuvable dans le fichier commandes.")
+    else:
+        # Pour les devis : chercher Net Value avec année ou sans
+        value_cols = []
+        
+        # D'abord chercher avec l'année
+        for col in df.columns:
+            if "net value" in str(col).lower():
+                value_cols.append(col)
+        
+        if not value_cols:
+            raise KeyError("❌ Colonne 'Net Value' introuvable dans le fichier devis.")
+        
+        # Fonction pour extraire l'année de la colonne
+        def extract_year(c):
+            m = re.match(r"\s*(\d{4})\s+.*net value", str(c).lower())
+            return int(m.group(1)) if m else -1
+        
+        # Prendre la colonne avec l'année la plus récente ou sans année
+        if "Net Value" in df.columns:
+            value_col = "Net Value"
+        else:
+            value_col = max(value_cols, key=extract_year)
     
-    # Fonction pour extraire l'année de la colonne
-    def extract_year(c):
-        m = re.match(r"\s*(\d{4})\s+.*net value", str(c).lower())
-        return int(m.group(1)) if m else -1
-    
-    # Prendre la colonne avec l'année la plus récente
-    value_col = max(value_cols, key=extract_year)
-    
-    # Renommer la colonne
+    # Renommer la colonne pour uniformiser
     df = df.rename(columns={value_col: "Net Value"})
     
-    # ✅ CORRECTION : Nettoyer exactement comme dans le code Python
+    # Nettoyer la colonne
     df["Net Value"] = pd.to_numeric(
         df["Net Value"].astype(str).str.replace(r"[^\d\-,\.]", "", regex=True),
         errors="coerce"
@@ -246,28 +272,42 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int) -> pd.DataFrame
     
     return df
 
-def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call") -> pd.DataFrame:
-    """Agrège les commandes par document - IDENTIQUE AU CODE PYTHON"""
+def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call", file_type="commandes") -> pd.DataFrame:
+    """Agrège les commandes par document selon le type de fichier"""
+    
+    # Déterminer la colonne Created By selon le type
+    created_by_col = "Created By Header" if file_type == "commandes" else "Created By Line"
     
     # Flag IC au niveau commande (si au moins une ligne IC)
     ic_flag = (orders.assign(_is_ic=(orders["Purchase Order Type"] == IC_VALUE))
                      .groupby("Sales Document #")["_is_ic"].any()
                      .rename("HasIC").reset_index())
 
-    # ✅ AGRÉGATION IDENTIQUE AU CODE PYTHON
+    # Agrégation
+    agg_dict = {
+        "Date": ("Date", "min"),
+        "SoldTo #": ("SoldTo #", "first"),
+        "SoldTo Name": ("SoldTo Name", "first"),
+        "Net Value": ("Net Value", "sum"),
+        "Purchase Order Type": ("Purchase Order Type", "first"),
+        "FY": ("Année_Fiscale", "max"),
+        "FiscalMonth": ("Mois_Fiscal", "min"),
+        "Month": ("Mois", "min"),
+        "MonthName": ("Nom_Mois", "first")
+    }
+    
+    # Ajouter la colonne Created By appropriée
+    agg_dict[f"Created By Line"] = (created_by_col, "first")
+    
+    # Ajouter SoldTo Managed Group ou Payer Managed Group
+    if file_type == "commandes" and "Payer Managed Group" in orders.columns:
+        agg_dict["SoldTo Managed Group"] = ("Payer Managed Group", "first")
+    elif "SoldTo Managed Group" in orders.columns:
+        agg_dict["SoldTo Managed Group"] = ("SoldTo Managed Group", "first")
+    
     agg = (orders.sort_values(["Sales Document #","Date"])
                   .groupby("Sales Document #", as_index=False)
-                  .agg(Date=("Date","min"),
-                       **{"SoldTo #":("SoldTo #","first")},
-                       **{"SoldTo Name":("SoldTo Name","first")},  # Ajouter SoldTo Name
-                        **{"SoldTo Managed Group":("SoldTo Managed Group","first")},  
-                       **{"Net Value":("Net Value","sum")},
-                       **{"Created By Line":("Created By Line","first")},
-                       **{"Purchase Order Type":("Purchase Order Type","first")},  # Ajouter Purchase Order Type
-                       FY=("Année_Fiscale","max"),
-                       FiscalMonth=("Mois_Fiscal","min"),
-                       Month=("Mois","min"),
-                       MonthName=("Nom_Mois","first")))
+                  .agg(**agg_dict))
     
     # Merger avec le flag IC
     agg = agg.merge(ic_flag, on="Sales Document #", how="left").fillna({"HasIC":False})
@@ -277,10 +317,9 @@ def build_real_orders_for_user_python_style(orders: pd.DataFrame, attrib: pd.Dat
     """Construit les commandes réelles EXACTEMENT comme le code Python"""
     
     # ✅ ÉTAPE 1 : Détecter et nettoyer la colonne Net Value
-    orders_cleaned = _detect_net_value_column(orders.copy(), orders['Année_Fiscale'].iloc[0])
-    
+    orders_cleaned = _detect_net_value_column(orders.copy(), orders['Année_Fiscale'].iloc[0], "commandes")    
     # ✅ ÉTAPE 2 : Agrégation par document
-    aggs = aggregate_orders_by_doc(orders_cleaned)
+    aggs = aggregate_orders_by_doc(orders_cleaned, "IC-Inbound Call", "commandes")
 
     # ✅ ÉTAPE 3 : Attribution (INNER JOIN)
     attrib_unique = attrib[["Order Document #","Created By Header"]].drop_duplicates("Order Document #")
@@ -317,20 +356,25 @@ def build_real_orders_for_user_python_style(orders: pd.DataFrame, attrib: pd.Dat
 
 
 @st.cache_data
-def load_and_process_file(uploaded_file):
-    """Charge et traite un fichier Excel"""
+def load_and_process_file(uploaded_file, file_type="devis"):
+    """Charge et traite un fichier Excel selon son type"""
     try:
         df = pd.read_excel(uploaded_file)
         
-        # Nettoyer les noms de colonnes (enlever les espaces en début/fin)
+        # Nettoyer les noms de colonnes
         df.columns = df.columns.str.strip()
         
-        # Vérifier que la colonne Created On Date - Line Local existe
-        if 'Created On Date - Line Local' not in df.columns:
-            st.error(f"La colonne 'Created On Date - Line Local' n'a pas été trouvée dans le fichier. Colonnes disponibles : {', '.join(df.columns)}")
+        # Vérifier les colonnes selon le type de fichier
+        if file_type == "commandes":
+            required_col = 'Posting Date'
+        else:  # devis
+            required_col = 'Created On Date - Line Local'
+        
+        if required_col not in df.columns:
+            st.error(f"La colonne '{required_col}' n'a pas été trouvée dans le fichier {file_type}. Colonnes disponibles : {', '.join(df.columns)}")
             return None
         
-        df = parse_date_column(df)        
+        df = parse_date_column(df, file_type=file_type)        
     
         # Vérifier qu'il reste des données après le filtrage
         if len(df) == 0:
@@ -339,7 +383,7 @@ def load_and_process_file(uploaded_file):
             
         return df
     except Exception as e:
-        st.error(f"Erreur lors du chargement du fichier : {str(e)}")
+        st.error(f"Erreur lors du chargement du fichier {file_type} : {str(e)}")
         return None
     
 @st.cache_data
@@ -523,7 +567,7 @@ def categorize_commercials(df_devis, df_commandes, df_mapping_commerciaux, df_ma
     """Catégorise les commerciaux entre commerciaux et commerciaux de saisie - VERSION CORRIGÉE"""
     # Obtenir tous les commerciaux présents dans les données (CONVERSION EN STRING)
     commercials_devis = df_devis['Created By Line'].dropna().astype(str).unique()
-    commercials_commandes = df_commandes['Created By Line'].dropna().astype(str).unique()
+    commercials_commandes = df_commandes['Created By Header'].dropna().astype(str).unique()  # ← CORRECTION ICI
     all_commercials = list(set(commercials_devis) | set(commercials_commandes))
     
     # Séparer selon les fichiers de mapping
@@ -537,7 +581,7 @@ def categorize_commercials(df_devis, df_commandes, df_mapping_commerciaux, df_ma
             if str(commercial) in commerciaux_avec_objectifs:  # CONVERSION EXPLICITE
                 commerciaux_list.append(str(commercial))
     
-    # ✅ CORRECTION : Commerciaux de saisie (SEULEMENT ceux des commandes)
+    # Commerciaux de saisie (SEULEMENT ceux des commandes)
     if df_mapping_saisie is not None:
         commerciaux_saisie_mapping = df_mapping_saisie['User Sap'].astype(str).unique()
         for commercial in commercials_commandes:  # ← CHANGEMENT ICI : seulement commercials_commandes
@@ -546,21 +590,31 @@ def categorize_commercials(df_devis, df_commandes, df_mapping_commerciaux, df_ma
     
     return commerciaux_list, commerciaux_saisie_list
 
-def get_net_value_column(df, fiscal_year):
-    """Détermine la colonne de valeur nette à utiliser selon l'année fiscale"""
-    possible_cols = [f'{fiscal_year} Net Value', f'{fiscal_year}  Net Value', f'Net Value {fiscal_year}']
+def get_net_value_column(df, fiscal_year, file_type="devis"):
+    """Détermine la colonne de valeur nette selon le type de fichier"""
+    if file_type == "commandes":
+        # Pour les commandes : Customer Sales
+        if 'Customer Sales' in df.columns:
+            return 'Customer Sales'
+        return None
+    else:
+        # Pour les devis : Net Value avec ou sans année
+        if 'Net Value' in df.columns:
+            return 'Net Value'
+        
+        possible_cols = [f'{fiscal_year} Net Value', f'{fiscal_year}  Net Value', f'Net Value {fiscal_year}']
+        
+        for col in possible_cols:
+            if col in df.columns:
+                return col
+        
+        # Dernière tentative
+        for col in df.columns:
+            if 'net value' in col.lower():
+                return col
+        
+        return None
     
-    for col in possible_cols:
-        if col in df.columns:
-            return col
-    
-    # Si aucune colonne spécifique trouvée, chercher une colonne générique
-    for col in df.columns:
-        if 'net value' in col.lower():
-            return col
-    
-    return None
-
 def get_objectif_column(df_objectifs, fiscal_year):
     """Détermine la colonne d'objectifs à utiliser selon l'année fiscale"""
     possible_cols = [f'Objectifs {fiscal_year}', f'Objectif {fiscal_year}']
@@ -627,7 +681,11 @@ def filter_data_by_commercial_list(df, commercials_list, fiscal_year=None, month
         ]
     
     if commercial and commercial != "Tous les commerciaux":
-        filtered_df = filtered_df[filtered_df['Created By Line'] == str(commercial)]
+        # Utiliser la bonne colonne selon le type de fichier
+        if 'Created By Line' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['Created By Line'] == str(commercial)]
+        elif 'Created By Header' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['Created By Header'] == str(commercial)]
     
     return filtered_df
 
@@ -654,7 +712,7 @@ def calculate_kpis(df_devis, df_commandes, df_objectifs=None, df_mapping=None, f
     else:
         # Fallback si pas de mapping : prendre ceux des données
         commercials_devis = df_devis['Created By Line'].dropna().astype(str).unique()
-        commercials_commandes = df_commandes['Created By Line'].dropna().astype(str).unique()
+        commercials_commandes = df_commandes['Created By Header'].dropna().astype(str).unique()
         all_commercials = list(set(commercials_devis) | set(commercials_commandes))
         nb_commerciaux = len(all_commercials)
     
@@ -663,7 +721,7 @@ def calculate_kpis(df_devis, df_commandes, df_objectifs=None, df_mapping=None, f
     # Ajuster le nombre si on filtre sur un commercial spécifique
     commercials_in_data = list(set(
         list(df_devis['Created By Line'].dropna().astype(str).unique()) + 
-        list(df_commandes['Created By Line'].dropna().astype(str).unique())
+        list(df_commandes['Created By Header'].dropna().astype(str).unique())
     ))
 
     if len(commercials_in_data) == 1:
@@ -695,7 +753,7 @@ def calculate_kpis(df_devis, df_commandes, df_objectifs=None, df_mapping=None, f
         # Déterminer quels commerciaux considérer selon les données filtrées
         commercials_in_data = list(set(
             list(df_devis['Created By Line'].dropna().astype(str).unique()) + 
-            list(df_commandes['Created By Line'].dropna().astype(str).unique())
+            list(df_commandes['Created By Header'].dropna().astype(str).unique())
         ))
         
         # Si les données ne concernent qu'un seul commercial, calculer seulement pour lui
@@ -741,7 +799,7 @@ def calculate_kpis_saisie_only(df_commandes, df_mapping_saisie, fiscal_year=None
     # ET qui sont dans le mapping de saisie
     if df_mapping_saisie is not None:
         # Commerciaux qui ont des commandes dans les données filtrées
-        commercials_with_data = df_commandes['Created By Line'].dropna().astype(str).unique()
+        commercials_with_data = df_commandes['Created By Header'].dropna().astype(str).unique()
         # Commerciaux autorisés selon le mapping
         commercials_in_mapping = df_mapping_saisie['User Sap'].astype(str).unique()
         # ✅ INTERSECTION : seulement ceux qui sont dans les deux
@@ -749,7 +807,7 @@ def calculate_kpis_saisie_only(df_commandes, df_mapping_saisie, fiscal_year=None
         nb_commerciaux = len(valid_commercials)
     else:
         # Si pas de mapping, compter directement les commerciaux dans les données
-        nb_commerciaux = df_commandes['Created By Line'].dropna().astype(str).nunique()
+        nb_commerciaux = df_commandes['Created By Header'].dropna().astype(str).nunique()
     
     # ✅ CORRECTION IMPORTANTE : Si aucun commercial trouvé, mettre 1 pour éviter division par zéro
     if nb_commerciaux == 0:
@@ -777,17 +835,17 @@ def calculate_kpis_saisie_only(df_commandes, df_mapping_saisie, fiscal_year=None
 def calculate_commercial_performance_saisie(df_commandes, df_mapping_saisie, fiscal_year):
     """Calcule les performances pour commerciaux de saisie (SEULEMENT commandes) - VERSION CORRIGÉE"""
     
-    # ✅ CORRECTION : Prendre seulement les commerciaux qui ont des données dans df_commandes
+    # Prendre seulement les commerciaux qui ont des données dans df_commandes
     # ET qui sont dans le mapping de saisie
     if df_mapping_saisie is not None:
         # Commerciaux qui ont des commandes dans les données filtrées
-        commercials_with_data = df_commandes['Created By Line'].dropna().astype(str).unique()
+        commercials_with_data = df_commandes['Created By Header'].dropna().astype(str).unique()
         # Commerciaux autorisés selon le mapping
         commercials_in_mapping = df_mapping_saisie['User Sap'].astype(str).unique()
         # ✅ INTERSECTION : seulement ceux qui sont dans les deux
         all_commercials_saisie = [c for c in commercials_with_data if c in commercials_in_mapping]
     else:
-        all_commercials_saisie = df_commandes['Created By Line'].dropna().astype(str).unique()
+        all_commercials_saisie = df_commandes['Created By Header'].dropna().astype(str).unique()
     
     # Déterminer la colonne de valeur
     net_value_col_commandes = get_net_value_column(df_commandes, fiscal_year)
@@ -795,7 +853,7 @@ def calculate_commercial_performance_saisie(df_commandes, df_mapping_saisie, fis
     stats = []
     
     for commercial in all_commercials_saisie:
-        commandes_com = df_commandes[df_commandes['Created By Line'] == commercial]
+        commandes_com = df_commandes[df_commandes['Created By Header'] == commercial]
         
         nom_complet = get_commercial_name(commercial, df_mapping_saisie)
         
@@ -860,7 +918,7 @@ def calculate_commercial_performance(df_devis, df_commandes, df_objectifs, df_ma
     else:
         # Fallback si pas de mapping
         commercials_devis = df_devis['Created By Line'].dropna().astype(str).unique()
-        commercials_commandes = df_commandes['Created By Line'].dropna().astype(str).unique()
+        commercials_commandes = df_commandes['Created By Header'].dropna().astype(str).unique()
         all_commercials = list(set(commercials_devis) | set(commercials_commandes))
     
     # Déterminer les colonnes de valeur
@@ -872,7 +930,8 @@ def calculate_commercial_performance(df_devis, df_commandes, df_objectifs, df_ma
     
     for commercial in all_commercials:
         devis_com = df_devis[df_devis['Created By Line'] == commercial]
-        commandes_com = df_commandes[df_commandes['Created By Line'] == commercial]
+        commandes_com = df_commandes[df_commandes['Created By Header'] == commercial]
+
         
         nom_complet = get_commercial_name(commercial, df_mapping)
         
@@ -1555,13 +1614,13 @@ def filter_data_by_commercial_list_for_saisie(df, commercials_list, fiscal_year=
     """Filtre spécialement pour les commerciaux de saisie - VERSION CORRIGÉE"""
     # Créer une copie et convertir les types
     df_copy = df.copy()
-    df_copy['Created By Line'] = df_copy['Created By Line'].astype(str)
+    df_copy['Created By Header'] = df_copy['Created By Header'].astype(str)
     
     # Convertir la liste des commerciaux en string
     commercials_list_str = [str(x) for x in commercials_list]
     
     # Filtrer par la liste des commerciaux autorisés
-    filtered_df = df_copy[df_copy['Created By Line'].isin(commercials_list_str)].copy()
+    filtered_df = df_copy[df_copy['Created By Header'].isin(commercials_list_str)].copy()
     
     if fiscal_year:
         filtered_df = filtered_df[filtered_df['Année_Fiscale'] == fiscal_year]
@@ -1576,7 +1635,7 @@ def filter_data_by_commercial_list_for_saisie(df, commercials_list, fiscal_year=
         ]
     
     if commercial and commercial != "Tous les commerciaux":
-        filtered_df = filtered_df[filtered_df['Created By Line'] == str(commercial)]
+        filtered_df = filtered_df[filtered_df['Created By Header'] == str(commercial)]
     
     return filtered_df
 
@@ -1851,7 +1910,7 @@ if not st.session_state.files_loaded:
         mapping_file = st.file_uploader("Fichier avec les noms des commerciaux", type=['xlsx', 'xls'], key="mapping_uploader", label_visibility="collapsed")
     
     with col2:
-        st.markdown("##### 📋 Fichier des commandes *")
+        st.markdown("##### 📋 Fichier des commandes (Copa) *")
         commandes_file = st.file_uploader("Sélectionnez votre fichier Excel", type=['xlsx', 'xls'], key="commandes_uploader", label_visibility="collapsed")
         
         st.markdown("##### 📝 Fichier mapping commerciaux de saisie *")
@@ -1872,9 +1931,8 @@ if not st.session_state.files_loaded:
             if st.button("🚀 Lancer l'analyse", type="primary", use_container_width=True):
                 with st.spinner("⏳ Traitement des données en cours..."):
                     # Charger les fichiers
-                    df_devis = load_and_process_file(devis_file)
-                    
-                    df_commandes = load_and_process_file(commandes_file)
+                    df_devis = load_and_process_file(devis_file, "devis")
+                    df_commandes = load_and_process_file(commandes_file, "commandes")
                     
                     df_objectifs = load_objectifs_file(objectifs_file)
                     
