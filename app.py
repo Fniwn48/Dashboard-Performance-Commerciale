@@ -229,7 +229,7 @@ def parse_date_column(df, date_column=None, file_type="devis"):
     return df
 
 def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devis") -> pd.DataFrame:
-    """Détecte et nettoie la colonne Net Value selon le type de fichier"""
+    """Détecte et nettoie la colonne Net Value selon le type de fichier - VERSION CORRIGÉE"""
     import re
     
     if file_type == "commandes":
@@ -237,7 +237,8 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devi
         if "Customer Sales" in df.columns:
             value_col = "Customer Sales"
         else:
-            raise KeyError("❌ Colonne 'Customer Sales' introuvable dans le fichier commandes.")
+            available_cols = ', '.join(df.columns)
+            raise KeyError(f"❌ Colonne 'Customer Sales' introuvable dans le fichier commandes. Colonnes disponibles : {available_cols}")
     else:
         # Pour les devis : chercher Net Value avec année ou sans
         value_cols = []
@@ -248,7 +249,8 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devi
                 value_cols.append(col)
         
         if not value_cols:
-            raise KeyError("❌ Colonne 'Net Value' introuvable dans le fichier devis.")
+            available_cols = ', '.join(df.columns)
+            raise KeyError(f"❌ Colonne 'Net Value' introuvable dans le fichier devis. Colonnes disponibles : {available_cols}")
         
         # Fonction pour extraire l'année de la colonne
         def extract_year(c):
@@ -273,10 +275,21 @@ def _detect_net_value_column(df: pd.DataFrame, fiscal_year: int, file_type="devi
     return df
 
 def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call", file_type="commandes") -> pd.DataFrame:
-    """Agrège les commandes par document selon le type de fichier"""
+    """Agrège les commandes par document selon le type de fichier - VERSION CORRIGÉE"""
     
-    # Déterminer la colonne Created By selon le type
-    created_by_col = "Created By Header" if file_type == "commandes" else "Created By Line"
+    # ✅ CORRECTION : Détecter automatiquement la bonne colonne
+    if file_type == "commandes" and "Created By Header" in orders.columns:
+        created_by_col = "Created By Header"
+    elif file_type == "devis" and "Created By Line" in orders.columns:
+        created_by_col = "Created By Line"
+    else:
+        # Fallback : essayer de détecter automatiquement
+        if "Created By Header" in orders.columns:
+            created_by_col = "Created By Header"
+        elif "Created By Line" in orders.columns:
+            created_by_col = "Created By Line"
+        else:
+            raise ValueError("Aucune colonne 'Created By' trouvée")
     
     # Flag IC au niveau commande (si au moins une ligne IC)
     ic_flag = (orders.assign(_is_ic=(orders["Purchase Order Type"] == IC_VALUE))
@@ -293,11 +306,9 @@ def aggregate_orders_by_doc(orders: pd.DataFrame, IC_VALUE="IC-Inbound Call", fi
         "FY": ("Année_Fiscale", "max"),
         "FiscalMonth": ("Mois_Fiscal", "min"),
         "Month": ("Mois", "min"),
-        "MonthName": ("Nom_Mois", "first")
+        "MonthName": ("Nom_Mois", "first"),
+        "Created By Line": (created_by_col, "first")  # Uniformiser le nom
     }
-    
-    # Ajouter la colonne Created By appropriée
-    agg_dict[f"Created By Line"] = (created_by_col, "first")
     
     # Ajouter SoldTo Managed Group ou Payer Managed Group
     if file_type == "commandes" and "Payer Managed Group" in orders.columns:
@@ -591,7 +602,7 @@ def categorize_commercials(df_devis, df_commandes, df_mapping_commerciaux, df_ma
     return commerciaux_list, commerciaux_saisie_list
 
 def get_net_value_column(df, fiscal_year, file_type="devis"):
-    """Détermine la colonne de valeur nette selon le type de fichier"""
+    """Détermine la colonne de valeur nette selon le type de fichier - VERSION CORRIGÉE"""
     if file_type == "commandes":
         # Pour les commandes : Customer Sales
         if 'Customer Sales' in df.columns:
@@ -660,13 +671,22 @@ def filter_data_by_commercial_list(df, commercials_list, fiscal_year=None, month
     """Filtre les données selon la liste des commerciaux et autres critères - VERSION CORRIGÉE"""
     # Créer une copie et convertir les types
     df_copy = df.copy()
-    df_copy['Created By Line'] = df_copy['Created By Line'].astype(str)
+    
+    # ✅ CORRECTION : Détecter automatiquement la bonne colonne
+    if 'Created By Line' in df_copy.columns:
+        created_by_col = 'Created By Line'  # Pour les devis
+    elif 'Created By Header' in df_copy.columns:
+        created_by_col = 'Created By Header'  # Pour les commandes
+    else:
+        raise ValueError("Aucune colonne 'Created By' trouvée dans les données")
+    
+    df_copy[created_by_col] = df_copy[created_by_col].astype(str)
     
     # Convertir la liste des commerciaux en string
     commercials_list_str = [str(x) for x in commercials_list]
     
     # Filtrer par la liste des commerciaux autorisés
-    filtered_df = df_copy[df_copy['Created By Line'].isin(commercials_list_str)].copy()
+    filtered_df = df_copy[df_copy[created_by_col].isin(commercials_list_str)].copy()
     
     if fiscal_year:
         filtered_df = filtered_df[filtered_df['Année_Fiscale'] == fiscal_year]
@@ -681,13 +701,11 @@ def filter_data_by_commercial_list(df, commercials_list, fiscal_year=None, month
         ]
     
     if commercial and commercial != "Tous les commerciaux":
-        # Utiliser la bonne colonne selon le type de fichier
-        if 'Created By Line' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['Created By Line'] == str(commercial)]
-        elif 'Created By Header' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['Created By Header'] == str(commercial)]
+        filtered_df = filtered_df[filtered_df[created_by_col] == str(commercial)]
     
     return filtered_df
+
+
 
 
 def calculate_kpis(df_devis, df_commandes, df_objectifs=None, df_mapping=None, fiscal_year=None, period_months=None, df_objectifs_personnalises=None):
